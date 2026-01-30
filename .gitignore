@@ -35,6 +35,7 @@ env/
 # Env and secrets
 .env
 .env.local
+.env.example
 *.pem
 
 # Logs and cache
