@@ -56,17 +56,35 @@
 | `/search <запрос>` | Поиск изображений по описанию (пока заглушка) |
 | `/stats` | Статистика по индексу (пока заглушка) |
 
+## CI/CD
+
+На каждый push и pull request в `main`/`master` запускается GitHub Actions:
+
+- **Lint** — Ruff проверяет код (`ruff check`)
+- **Format** — проверка форматирования (`ruff format --check`)
+- **Smoke test** — проверка, что приложение импортируется и создаётся бот (с тестовым токеном)
+
+Конфиг: [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Локально можно запустить те же проверки:
+
+```bash
+pip install ruff
+ruff check src run.py
+ruff format --check src run.py
+```
+
 ## Структура проекта
 
 ```
 tg_bot/
+├── .github/workflows/ci.yml
 ├── run.py              # Точка входа
 ├── requirements.txt
+├── pyproject.toml      # Ruff, метаданные проекта
 ├── .env                # Не в Git: BOT_TOKEN, CHANNEL_USERNAME
 ├── src/
 │   ├── config.py       # Загрузка конфига из .env
 │   ├── bot.py          # Создание бота и диспетчера
 │   └── handlers/
-│       └── commands.py # Обработчики /start, /help, /search, /stats               
+│       └── commands.py # Обработчики /start, /help, /search, /stats
 └── README.md
 ```

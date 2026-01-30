@@ -1,4 +1,5 @@
 """Конфигурация бота из переменных окружения."""
+
 import os
 from dataclasses import dataclass
 
@@ -19,9 +20,7 @@ class BotConfig:
     def from_env(cls) -> "BotConfig":
         token = os.getenv("BOT_TOKEN", "").strip()
         if not token:
-            raise ValueError(
-                "BOT_TOKEN не задан. Создайте файл .env и укажите BOT_TOKEN=..."
-            )
+            raise ValueError("BOT_TOKEN не задан. Создайте файл .env и укажите BOT_TOKEN=...")
         return cls(
             token=token,
             channel_username=os.getenv("CHANNEL_USERNAME", "").strip(),

@@ -1,4 +1,5 @@
 """Сборка и запуск бота."""
+
 import asyncio
 import logging
 import sys
