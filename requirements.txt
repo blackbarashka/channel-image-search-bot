@@ -1,0 +1,8 @@
+# Telegram bot
+aiogram>=3.13.0
+
+# Config
+python-dotenv>=1.0.0
+
+# Async (stdlib, но для совместимости явно)
+# asyncio — встроен в Python 3.11+
