@@ -1,4 +1,5 @@
 """Обработчики команд: /start, /help, /search, /stats."""
+
 import html
 import logging
 
@@ -54,9 +55,7 @@ async def cmd_search(message: Message) -> None:
     query = text.replace("/search", "").strip() if "/search" in text else text.strip()
 
     if not query:
-        await message.answer(
-            "Напишите запрос после команды, например:\n/search закат на море"
-        )
+        await message.answer("Напишите запрос после команды, например:\n/search закат на море")
         return
 
     # TODO: вызов ML (ruCLIP) и поиск по векторам в БД, пагинация
