@@ -1,11 +1,12 @@
-"""Обработчики команд: /start, /help, /search, /stats."""
+"""Обработчики команд: /start, /help, /search, /stats, /abdul."""
 
 import html
 import logging
+from pathlib import Path
 
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import FSInputFile, Message
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,17 @@ async def cmd_stats(message: Message) -> None:
         "Статистика пока недоступна: индексация канала ещё не подключена.\n"
         "После настройки канала и индекса здесь будет число проиндексированных изображений."
     )
+
+
+@router.message(Command("abdul"))
+async def cmd_abdul(message: Message) -> None:
+    """Отправляет фото по команде /abdul."""
+    root = Path(__file__).resolve().parent.parent.parent
+    photo_path = root / "image.png"
+    if not photo_path.exists():
+        await message.answer("Фото не найдено (image.png).")
+        return
+    await message.answer_photo(FSInputFile(photo_path))
 
 
 @router.message(Command("search"))
