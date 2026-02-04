@@ -169,9 +169,6 @@ async def btn_search(message: Message, state: FSMContext) -> None:
         reply_markup=cancel_menu(),
     )
 
-
-# ----- ОБРАБОТКА ТЕКСТА В РЕЖИМЕ ПОИСКА -----
-
 @router.message(lambda m: (m.text or "") == "❌ Отмена")
 async def btn_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
@@ -198,10 +195,6 @@ async def process_search_query(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("Что дальше?", reply_markup=main_menu())
 
-
-# ----- АВТООТВЕТ НА ПРИВЕТ -----
-# (ставим ВЫШЕ fallback, чтобы привет не попадал в "не понял")
-
 @router.message(lambda m: (m.text or "").strip().lower() in {"привет", "здравствуй", "здравствуйте", "hello", "hi", "hey"})
 async def greet(message: Message) -> None:
     await message.answer(
@@ -209,133 +202,6 @@ async def greet(message: Message) -> None:
         "Нажмите 🔎 Поиск, чтобы ввести описание изображения, или откройте справку.",
         reply_markup=main_menu(),
     )
-
-
-# ----- FALLBACK: ЛЮБОЕ ДРУГОЕ СООБЩЕНИЕ -----
-# (обязательно САМЫЙ ПОСЛЕДНИЙ обработчик в файле)
-
-@router.message()
-async def fallback(message: Message) -> None:
-    # НЕТ текста: фото/стикер/голосовое и т.д.
-    if not (message.text or "").strip():
-        await message.answer(
-            "Я пока понимаю только текст 🙂\n"
-            "Используйте кнопки меню ниже.",
-            reply_markup=main_menu(),
-        )
-        return
-
-
-    # TODO: вызов ML (ruCLIP) и поиск по векторам в БД, пагинация
-    safe_query = html.escape(query[:100])
-    await message.answer(
-        f"Запрос «{safe_query}» принят ✅\n"
-        "Семантический поиск будет доступен после подключения индекса и модели ruCLIP.",
-        reply_markup=main_menu(),
-    )
-@router.message(Command("about"))
-async def cmd_about(message: Message) -> None:
-    """Информация о проекте."""
-    await message.answer(
-        "<b>📌 О проекте</b>\n\n"
-        "<b>Название:</b> Image Search Telegram Bot\n"
-        "<b>Версия:</b> 0.2 (КТ2)\n\n"
-        "<b>Цель проекта:</b>\n"
-        "Поиск изображений в Telegram-канале по текстовому описанию пользователя.\n\n"
-        "<b>Реализовано на КТ2:</b>\n"
-        "• кнопочное меню\n"
-        "• режим ввода запроса без команд\n"
-        "• базовая архитектура проекта\n"
-        "• конфигурация через .env\n"
-        "• логирование\n\n"
-        "<b>Планируется:</b>\n"
-        "• индексация изображений канала\n"
-        "• семантический поиск (ruCLIP)\n"
-        "• база данных и выдача результатов\n\n"
-        "<i>Проект выполнен в рамках курсовой работы.</i>",
-        reply_markup=main_menu(),
-    )
-
-def cancel_menu() -> ReplyKeyboardMarkup:
-    """Клавиатура с кнопкой отмены."""
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="❌ Отмена")],
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=True,
-    )
-
-
-# ----- КНОПКИ МЕНЮ -----
-
-@router.message(lambda m: (m.text or "") == "🖼 Пример")
-async def btn_example(message: Message) -> None:
-    await cmd_demo(message)
-
-
-@router.message(lambda m: (m.text or "") == "📊 Статистика")
-async def btn_stats(message: Message) -> None:
-    await cmd_stats(message)
-
-
-@router.message(lambda m: (m.text or "") == "ℹ️ Справка")
-async def btn_help(message: Message) -> None:
-    await cmd_help(message)
-
-
-@router.message(lambda m: (m.text or "") == "🔎 Поиск")
-async def btn_search(message: Message, state: FSMContext) -> None:
-    await state.set_state(SearchState.waiting_query)
-    await message.answer(
-        "Введите текст запроса (например: <i>закат на море</i>).",
-        reply_markup=cancel_menu(),
-    )
-
-
-# ----- ОБРАБОТКА ТЕКСТА В РЕЖИМЕ ПОИСКА -----
-
-@router.message(lambda m: (m.text or "") == "❌ Отмена")
-async def btn_cancel(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer(
-        "Действие отменено 👍",
-        reply_markup=main_menu(),
-    )
-
-@router.message(SearchState.waiting_query)
-async def process_search_query(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip()
-
-    if not text:
-        await message.answer("Введите текст запроса или нажмите ❌ Отмена.")
-        return
-
-    # TODO: вызов ML (ruCLIP) и поиск по векторам в БД, пагинация
-    safe_text = html.escape(text[:100])
-    await message.answer(
-        f"Запрос «{safe_text}» принят ✅\n"
-        "Семантический поиск будет доступен после подключения индекса и модели ruCLIP."
-    )
-
-    await state.clear()
-    await message.answer("Что дальше?", reply_markup=main_menu())
-
-
-# ----- АВТООТВЕТ НА ПРИВЕТ -----
-# (ставим ВЫШЕ fallback, чтобы привет не попадал в "не понял")
-
-@router.message(lambda m: (m.text or "").strip().lower() in {"привет", "здравствуй", "здравствуйте", "hello", "hi", "hey"})
-async def greet(message: Message) -> None:
-    await message.answer(
-        "Привет! 👋\n"
-        "Нажмите 🔎 Поиск, чтобы ввести описание изображения, или откройте справку.",
-        reply_markup=main_menu(),
-    )
-
-
-# ----- FALLBACK: ЛЮБОЕ ДРУГОЕ СООБЩЕНИЕ -----
-# (обязательно САМЫЙ ПОСЛЕДНИЙ обработчик в файле)
 
 @router.message()
 async def fallback(message: Message) -> None:
