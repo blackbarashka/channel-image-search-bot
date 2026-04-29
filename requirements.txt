@@ -1,0 +1,25 @@
+# Telegram bot
+aiogram>=3.13.0,<4.0.0
+
+# Конфигурация
+python-dotenv>=1.0.0
+
+# ML: ruCLIP (ai-forever/ru-clip) — эмбеддинги текста и изображений (512 dim)
+# ВНИМАНИЕ: ruclip==0.0.2 в зависимостях прибивает huggingface-hub==0.2.1,
+# у которого баг "Distant resource does not have an ETag" с новым HF CDN.
+# Поэтому ruclip ставится отдельно через `pip install --no-deps ruclip==0.0.2`,
+# а сюда мы кладём совместимую версию huggingface-hub (где ещё есть cached_download,
+# но уже без жёсткой ETag-проверки).
+huggingface-hub>=0.10,<0.20
+torch>=2.0.0,<3.0
+torchvision>=0.15.0,<1.0
+Pillow>=10.0.0
+more-itertools
+tqdm
+numpy
+
+# БД: PostgreSQL + pgvector
+asyncpg>=0.29.0
+
+# Индексирование канала (через user-аккаунт)
+telethon>=1.36.0
