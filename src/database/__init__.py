@@ -1,12 +1,18 @@
 from .db import (
     add_image,
     add_user_channel,
+    can_add_channel,
     close_pool,
+    confirm_payment,
+    create_payment,
+    get_payment_by_id,
     get_stats,
+    get_user_subscription,
     init_pool,
     list_user_channels,
     remove_user_channel,
     search_images,
+    set_user_subscription,
 )
 
 __all__ = [
@@ -18,4 +24,10 @@ __all__ = [
     "add_user_channel",
     "remove_user_channel",
     "list_user_channels",
+    "get_user_subscription",
+    "set_user_subscription",
+    "can_add_channel",
+    "create_payment",
+    "confirm_payment",
+    "get_payment_by_id",
 ]

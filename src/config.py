@@ -61,3 +61,24 @@ class TelegramClientConfig:
                 "postgresql://postgres:postgres@localhost:5432/tgbot",
             ).strip(),
         )
+
+
+@dataclass(frozen=True)
+class YookassaConfig:
+    shop_id: str
+    api_key: str
+
+    @classmethod
+    def from_env(cls) -> "YookassaConfig":
+        shop_id = os.getenv("YOOKASSA_SHOP_ID", "").strip()
+        api_key = os.getenv("YOOKASSA_API_KEY", "").strip()
+
+        if not shop_id or not api_key:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning("YOOKASSA_SHOP_ID или YOOKASSA_API_KEY не заданы — платежи отключены")
+
+        return cls(
+            shop_id=shop_id,
+            api_key=api_key,
+        )

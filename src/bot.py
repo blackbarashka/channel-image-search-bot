@@ -10,10 +10,11 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
-from src.config import BotConfig
+from src.config import BotConfig, YookassaConfig
 from src.database import close_pool, init_pool
 from src.handlers import commands_router
 from src.services import close_client, init_client
+from src.services.payment_service import init_yookassa
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,7 +37,15 @@ def create_bot(config: BotConfig) -> tuple[Bot, Dispatcher]:
 async def main() -> None:
     config = BotConfig.from_env()
     await init_pool(config.database_url)
-    await init_client()  # Telethon (если есть API_ID/API_HASH и сессия)
+    await init_client()
+    
+    # Инициализируем ЮKassa для платежей
+    yookassa_config = YookassaConfig.from_env()
+    if yookassa_config.shop_id and yookassa_config.api_key:
+        init_yookassa(yookassa_config.shop_id, yookassa_config.api_key)
+        logger.info("ЮKassa инициализирована для платежей")
+    else:
+        logger.warning("Платежи ЮKassa не настроены. Заполните YOOKASSA_SHOP_ID и YOOKASSA_API_KEY в .env")
 
     bot, dp = create_bot(config)
 
@@ -47,6 +56,7 @@ async def main() -> None:
             BotCommand(command="channels", description="Мои каналы"),
             BotCommand(command="remove_channel", description="Удалить канал"),
             BotCommand(command="search", description="Поиск изображений по описанию"),
+            BotCommand(command="subscribe", description="Подписки и платежи"),
             BotCommand(command="stats", description="Статистика индекса"),
             BotCommand(command="help", description="Справка"),
             BotCommand(command="about", description="О проекте"),

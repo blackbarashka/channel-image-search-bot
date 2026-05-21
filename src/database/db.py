@@ -69,9 +69,39 @@ async def init_pool(database_url: str) -> asyncpg.Pool:
         await conn.execute(
             "CREATE INDEX IF NOT EXISTS user_channels_user_idx ON user_channels(user_id)"
         )
-        # ivfflat капризен на маленьких объёмах, поэтому пробуем HNSW (pgvector >= 0.5).
-        # Если pgvector старее — fallback на seqscan (без индекса), что для тестового
-        # объёма (десятки тысяч строк) приемлемо.
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_subscriptions (
+                user_id         BIGINT PRIMARY KEY,
+                subscription_tier TEXT DEFAULT 'free',
+                start_date      TIMESTAMPTZ DEFAULT NOW(),
+                end_date        TIMESTAMPTZ,
+                updated_at      TIMESTAMPTZ DEFAULT NOW()
+            )
+            """
+        )
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payments (
+                id               SERIAL PRIMARY KEY,
+                user_id          BIGINT NOT NULL,
+                payment_id       TEXT UNIQUE NOT NULL,
+                subscription_tier TEXT NOT NULL,
+                amount           INTEGER NOT NULL,
+                currency         TEXT DEFAULT 'RUB',
+                status           TEXT DEFAULT 'pending',
+                created_at       TIMESTAMPTZ DEFAULT NOW(),
+                confirmed_at     TIMESTAMPTZ,
+                FOREIGN KEY (user_id) REFERENCES user_subscriptions(user_id)
+            )
+            """
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS payments_user_idx ON payments(user_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS payments_payment_id_idx ON payments(payment_id)"
+        )
         await conn.execute("DROP INDEX IF EXISTS images_embedding_idx")
         try:
             await conn.execute(
@@ -302,3 +332,197 @@ async def get_stats(user_id: Optional[int] = None) -> dict:
         "channels_count": channels or 0,
         "last_indexed": str(last_date) if last_date else "—",
     }
+
+
+# ---------- Подписки и лимиты ----------
+
+CHANNEL_LIMITS = {
+    "free": 1,
+    "basic": 5,
+    "pro": 10,
+    "premium": 15,
+}
+
+
+async def get_user_subscription(user_id: int) -> dict:
+    """Получает информацию о подписке пользователя.
+    
+    Возвращает: {'subscription_tier': str, 'channels_limit': int, 'channels_count': int}
+    """
+    pool = _require_pool()
+    async with pool.acquire() as conn:
+        sub = await conn.fetchrow(
+            "SELECT subscription_tier FROM user_subscriptions WHERE user_id = $1",
+            user_id,
+        )
+        
+        channels_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM user_channels WHERE user_id = $1",
+            user_id,
+        )
+    
+    tier = sub["subscription_tier"] if sub else "free"
+    limit = CHANNEL_LIMITS.get(tier, 1)
+    
+    return {
+        "subscription_tier": tier,
+        "channels_limit": limit,
+        "channels_count": channels_count or 0,
+    }
+
+
+async def set_user_subscription(user_id: int, subscription_tier: str, end_date: Optional[datetime] = None) -> None:
+    """Устанавливает (или обновляет) подписку пользователя.
+    
+    subscription_tier: 'free', 'basic', 'pro', 'premium'
+    """
+    if subscription_tier not in CHANNEL_LIMITS:
+        raise ValueError(f"Неизвестный уровень подписки: {subscription_tier}")
+    
+    pool = _require_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO user_subscriptions (user_id, subscription_tier, start_date, end_date, updated_at)
+            VALUES ($1, $2, NOW(), $3, NOW())
+            ON CONFLICT (user_id) DO UPDATE
+            SET subscription_tier = EXCLUDED.subscription_tier,
+                end_date = EXCLUDED.end_date,
+                updated_at = NOW()
+            """,
+            user_id,
+            subscription_tier,
+            end_date,
+        )
+
+
+async def can_add_channel(user_id: int) -> tuple[bool, str]:
+    """Проверяет, может ли пользователь добавить канал.
+    
+    Возвращает: (можно_ли, сообщение)
+    """
+    sub_info = await get_user_subscription(user_id)
+    channels_count = sub_info["channels_count"]
+    channels_limit = sub_info["channels_limit"]
+    tier = sub_info["subscription_tier"]
+    
+    if channels_count >= channels_limit:
+        if tier == "free":
+            msg = (
+                f"❌ Вы достигли лимита: <b>1 канал</b> для бесплатного аккаунта.\n\n"
+                f"Подключите подписку для добавления большего количества каналов:\n"
+                f"• <b>Базовая</b> — 5 каналов\n"
+                f"• <b>Профессиональная</b> — 10 каналов\n"
+                f"• <b>Премиум</b> — 15 каналов\n\n"
+                f"Используйте команду: /subscribe"
+            )
+        else:
+            msg = f"❌ Вы достигли лимита: <b>{channels_limit} каналов</b> для подписки <b>{tier}</b>."
+        return False, msg
+    
+    return True, ""
+
+
+# ---------- Платежи ----------
+
+SUBSCRIPTION_PRICES = {
+    "basic": 19900,      # 199 рублей в копейках
+    "pro": 39900,        # 399 рублей
+    "premium": 59900,    # 599 рублей
+}
+
+
+async def create_payment(user_id: int, subscription_tier: str, payment_id: str) -> int:
+    """Создает запись о платеже в БД.
+    
+    Возвращает ID платежа в БД.
+    """
+    if subscription_tier not in SUBSCRIPTION_PRICES:
+        raise ValueError(f"Неизвестный уровень подписки: {subscription_tier}")
+    
+    amount = SUBSCRIPTION_PRICES[subscription_tier]
+    pool = _require_pool()
+    
+    async with pool.acquire() as conn:
+        payment_id_db = await conn.fetchval(
+            """
+            INSERT INTO payments (user_id, payment_id, subscription_tier, amount)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            """,
+            user_id,
+            payment_id,
+            subscription_tier,
+            amount,
+        )
+    return payment_id_db
+
+
+async def confirm_payment(payment_id: str) -> bool:
+    """Подтверждает платеж и обновляет подписку пользователя.
+    
+    Возвращает True если платеж был успешно подтвержден.
+    """
+    pool = _require_pool()
+    
+    async with pool.acquire() as conn:
+        # Получаем информацию о платеже
+        payment = await conn.fetchrow(
+            "SELECT * FROM payments WHERE payment_id = $1",
+            payment_id,
+        )
+        
+        if not payment:
+            logger.warning("Payment not found: %s", payment_id)
+            return False
+        
+        if payment["status"] == "succeeded":
+            logger.info("Payment already confirmed: %s", payment_id)
+            return True
+        
+        # Обновляем статус платежа
+        await conn.execute(
+            """
+            UPDATE payments
+            SET status = 'succeeded', confirmed_at = NOW()
+            WHERE payment_id = $1
+            """,
+            payment_id,
+        )
+        
+        # Обновляем подписку пользователя
+        tier = payment["subscription_tier"]
+        user_id = payment["user_id"]
+        
+        # Подписка на 30 дней
+        end_date = datetime.now() + __import__("datetime").timedelta(days=30)
+        
+        await conn.execute(
+            """
+            INSERT INTO user_subscriptions (user_id, subscription_tier, start_date, end_date, updated_at)
+            VALUES ($1, $2, NOW(), $3, NOW())
+            ON CONFLICT (user_id) DO UPDATE
+            SET subscription_tier = EXCLUDED.subscription_tier,
+                end_date = EXCLUDED.end_date,
+                updated_at = NOW()
+            """,
+            user_id,
+            tier,
+            end_date,
+        )
+        
+        logger.info("Payment confirmed: user_id=%s, tier=%s, payment_id=%s", user_id, tier, payment_id)
+        return True
+
+
+async def get_payment_by_id(payment_id: str) -> Optional[dict]:
+    """Получает информацию о платеже."""
+    pool = _require_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM payments WHERE payment_id = $1",
+            payment_id,
+        )
+    return dict(row) if row else None
+
+

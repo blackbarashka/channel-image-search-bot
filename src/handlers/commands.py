@@ -23,13 +23,20 @@ from aiogram.types import (
 
 from src.database import (
     add_user_channel,
+    can_add_channel,
+    confirm_payment,
+    create_payment,
+    get_payment_by_id,
     get_stats,
+    get_user_subscription,
     list_user_channels,
     remove_user_channel,
     search_images,
+    set_user_subscription,
 )
 from src.services import MEDIA_DIR, get_client, get_lock
 from src.services.indexer_service import index_channel, normalize_username, resolve_channel
+from src.services.payment_service import create_payment as create_yookassa_payment
 
 logger = logging.getLogger(__name__)
 router = Router(name="commands")
@@ -51,7 +58,7 @@ def main_menu() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="🔎 Поиск"), KeyboardButton(text="📺 Мои каналы")],
             [KeyboardButton(text="➕ Добавить канал"), KeyboardButton(text="📊 Статистика")],
-            [KeyboardButton(text="ℹ️ Справка"), KeyboardButton(text="🧾 О проекте")],
+            [KeyboardButton(text="💎 Подписка"), KeyboardButton(text="ℹ️ Справка")],
         ],
         resize_keyboard=True,
     )
@@ -89,8 +96,14 @@ async def cmd_help(message: Message) -> None:
         "/search &lt;запрос&gt; — поиск по всем вашим каналам\n"
         "/search &lt;@channel&gt; &lt;запрос&gt; — поиск в одном канале\n"
         "/stats — состояние индекса\n"
+        "/subscribe — управление подписками и лимитами каналов\n"
         "/about — о проекте\n"
-        "/help — эта справка",
+        "/help — эта справка\n\n"
+        "<b>Лимиты каналов:</b>\n"
+        "• <b>Бесплатный план:</b> 1 канал\n"
+        "• <b>Базовый план:</b> 5 каналов\n"
+        "• <b>Профессиональный план:</b> 10 каналов\n"
+        "• <b>Премиум план:</b> 15 каналов",
         reply_markup=main_menu(),
     )
 
@@ -123,6 +136,190 @@ async def cmd_stats(message: Message) -> None:
         f"Последнее обновление: <code>{stats['last_indexed']}</code>",
         reply_markup=main_menu(),
     )
+
+
+# ---------- Подписки ----------
+
+@router.message(Command("subscribe"))
+async def cmd_subscribe(message: Message) -> None:
+    try:
+        sub_info = await get_user_subscription(message.from_user.id)
+    except Exception as exc:
+        logger.exception("get_user_subscription")
+        await message.answer(f"Ошибка БД: {exc}", reply_markup=main_menu())
+        return
+
+    current_tier = sub_info["subscription_tier"]
+    current_limit = sub_info["channels_limit"]
+    current_count = sub_info["channels_count"]
+
+    subscription_plans = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"{'✅ ' if current_tier == 'free' else ''}Бесплатный (1 канал)",
+                    callback_data="subscribe_free",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"{'✅ ' if current_tier == 'basic' else ''}💳 Базовый (5 каналов) — 199₽",
+                    callback_data="pay_basic",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"{'✅ ' if current_tier == 'pro' else ''}💳 Профессиональный (10 каналов) — 399₽",
+                    callback_data="pay_pro",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"{'✅ ' if current_tier == 'premium' else ''}💳 Премиум (15 каналов) — 599₽",
+                    callback_data="pay_premium",
+                )
+            ],
+        ]
+    )
+
+    await message.answer(
+        f"<b>💎 Планы подписок</b>\n\n"
+        f"<b>Ваш текущий план:</b> <code>{current_tier.upper()}</code>\n"
+        f"<b>Лимит каналов:</b> {current_count}/{current_limit}\n\n"
+        f"Выберите план для увеличения лимита каналов:",
+        reply_markup=subscription_plans,
+    )
+
+
+# Обработчики нажатия на кнопки подписок
+@router.callback_query(F.data == "subscribe_free")
+async def process_subscribe_free(query: CallbackQuery) -> None:
+    """Активирует бесплатный план без платежа."""
+    try:
+        await set_user_subscription(query.from_user.id, "free")
+    except Exception as exc:
+        logger.exception("set_user_subscription")
+        await query.answer(f"Ошибка БД: {exc}", show_alert=True)
+        return
+
+    await query.answer("✅ Активирован бесплатный план")
+    await query.message.edit_text(
+        f"<b>✅ Бесплатный план активирован</b>\n\n"
+        f"Лимит каналов: <b>1 канал</b>\n\n"
+        f"Используйте ➕ <b>Добавить канал</b> или загрузите подписку для большего количества каналов.",
+        reply_markup=main_menu(),
+    )
+
+
+@router.callback_query(F.data.startswith("pay_"))
+async def process_pay_subscription(query: CallbackQuery) -> None:
+    """Инициирует платеж через ЮKassa."""
+    tier = query.data.replace("pay_", "")
+    
+    if tier not in ["basic", "pro", "premium"]:
+        await query.answer("❌ Неизвестный план", show_alert=True)
+        return
+    
+    await query.answer("⏳ Создаю платеж...", show_alert=False)
+    
+    return_url = "https://t.me/tg_image_bot"
+    
+    try:
+        payment_info = create_yookassa_payment(
+            user_id=query.from_user.id,
+            subscription_tier=tier,
+            return_url=return_url,
+        )
+        
+        if not payment_info:
+            await query.answer("❌ Ошибка создания платежа", show_alert=True)
+            return
+        
+        # Сохраняем платеж в БД
+        await create_payment(
+            user_id=query.from_user.id,
+            subscription_tier=tier,
+            payment_id=payment_info["id"],
+        )
+        
+        tier_names = {
+            "basic": "Базовый (5 каналов) — 199₽",
+            "pro": "Профессиональный (10 каналов) — 399₽",
+            "premium": "Премиум (15 каналов) — 599₽",
+        }
+        
+        # Кнопка оплаты
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="💳 Оплатить",
+                        url=payment_info["confirmation_url"],
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔄 Проверить статус",
+                        callback_data=f"check_payment:{payment_info['id']}",
+                    )
+                ],
+            ]
+        )
+        
+        await query.message.edit_text(
+            f"<b>💳 Оплата подписки</b>\n\n"
+            f"<b>План:</b> {tier_names[tier]}\n"
+            f"<b>Сумма:</b> {payment_info['amount']} ₽\n"
+            f"<b>ID платежа:</b> <code>{payment_info['id']}</code>\n\n"
+            f"Нажмите кнопку ниже для оплаты. После завершения платежа нажмите «Проверить статус».",
+            reply_markup=keyboard,
+        )
+        
+    except Exception as exc:
+        logger.exception("Failed to create payment for user_id=%s, tier=%s", query.from_user.id, tier)
+        await query.answer(f"❌ Ошибка: {str(exc)[:100]}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("check_payment:"))
+async def process_check_payment(query: CallbackQuery) -> None:
+    """Проверяет статус платежа."""
+    payment_id = query.data.replace("check_payment:", "")
+    
+    try:
+        payment = await get_payment_by_id(payment_id)
+        
+        if not payment:
+            await query.answer("❌ Платеж не найден", show_alert=True)
+            return
+        
+        status = payment["status"]
+        
+        if status == "succeeded":
+            await query.answer("✅ Платеж подтвержден! Подписка активирована.", show_alert=True)
+            
+            # Обновляем сообщение
+            tier = payment["subscription_tier"]
+            tier_names = {
+                "basic": "Базовый (5 каналов)",
+                "pro": "Профессиональный (10 каналов)",
+                "premium": "Премиум (15 каналов)",
+            }
+            
+            await query.message.edit_text(
+                f"<b>✅ Платеж подтвержден</b>\n\n"
+                f"Ваша подписка: <b>{tier_names[tier]}</b>\n"
+                f"Действует 30 дней с момента оплаты.\n\n"
+                f"Используйте ➕ <b>Добавить канал</b> для добавления новых каналов.",
+                reply_markup=main_menu(),
+            )
+        elif status == "pending":
+            await query.answer("⏳ Платеж ещё в процессе. Пожалуйста, завершите оплату.", show_alert=True)
+        else:
+            await query.answer(f"❌ Платеж отменен. Статус: {status}", show_alert=True)
+            
+    except Exception as exc:
+        logger.exception("Failed to check payment status for payment_id=%s", payment_id)
+        await query.answer(f"❌ Ошибка: {str(exc)[:100]}", show_alert=True)
 
 
 # ---------- Каналы ----------
@@ -194,6 +391,11 @@ async def btn_channels(message: Message) -> None:
     await cmd_channels(message)
 
 
+@router.message(F.text == "💎 Подписка")
+async def btn_subscribe(message: Message) -> None:
+    await cmd_subscribe(message)
+
+
 @router.message(AddChannelState.waiting_username)
 async def process_add_channel(message: Message, state: FSMContext) -> None:
     raw = (message.text or "").strip()
@@ -208,6 +410,12 @@ async def _do_add_channel(message: Message, state: FSMContext, raw: str) -> None
     username = normalize_username(raw)
     if not username:
         await message.answer("Некорректный username", reply_markup=main_menu())
+        return
+
+    # Проверяем лимит каналов
+    can_add, error_msg = await can_add_channel(message.from_user.id)
+    if not can_add:
+        await message.answer(error_msg, reply_markup=main_menu())
         return
 
     client = get_client()
@@ -253,16 +461,28 @@ async def _index_in_background(message: Message, channel_username: str) -> None:
 
     async with lock:
         try:
+            status_msg = await message.answer(
+                f"⏳ Индексация канала <code>@{html.escape(channel_username)}</code> в процессе…\n\n"
+                f"<i>Пожалуйста, подождите несколько минут, это может занять время.</i>"
+            )
+            
             result = await index_channel(client, channel_username, MEDIA_DIR, INDEX_LIMIT)
-            await message.answer(
-                f"✅ Канал <code>@{channel_username}</code> проиндексирован.\n"
+            
+            # Обновляем сообщение о завершении
+            await status_msg.edit_text(
+                f"✅ Канал <code>@{html.escape(channel_username)}</code> проиндексирован.\n"
                 f"Добавлено фото: <b>{result['added']}</b>, пропущено: {result['skipped']}.",
+            )
+            
+            await message.answer(
+                f"🎉 Поиск в канале <code>@{html.escape(channel_username)}</code> готов!\n"
+                f"Используйте /search для поиска изображений.",
                 reply_markup=main_menu(),
             )
         except Exception as exc:
             logger.exception("index_channel(%s) failed", channel_username)
             await message.answer(
-                f"❌ Ошибка индексации <code>@{channel_username}</code>: "
+                f"❌ Ошибка индексации <code>@{html.escape(channel_username)}</code>: "
                 f"{html.escape(str(exc))[:200]}",
                 reply_markup=main_menu(),
             )
